@@ -15,8 +15,7 @@ app.use(express.json());
 
 // --- AYARLAR ---
 
-// 1. Mistral İstemcisi (GÜNCELLENDİ)
-// Yeni versiyonda API key bu şekilde obje içinde veriliyor
+// 1. Mistral İstemcisi
 const mistral = new Mistral({
     apiKey: process.env.MISTRAL_API_KEY
 });
@@ -46,25 +45,45 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-// Dosya yükleme ayarı
-const upload = multer({ dest: 'uploads/' });
+// --- GÜNCELLENEN DOSYA YÜKLEME AYARI (DÜZELTİLDİ) ---
+// Dosyaları uzantılarıyla (xlsx/csv) kaydetmesi için yapılandırma
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        // Klasör yoksa oluşturmayı dene
+        if (!fs.existsSync('uploads')) {
+            fs.mkdirSync('uploads');
+        }
+        cb(null, 'uploads/')
+    },
+    filename: function (req, file, cb) {
+        // Dosyanın orijinal uzantısını al (xlsx veya csv)
+        const ext = file.originalname.split('.').pop();
+        // Dosyaya tarihli benzersiz bir isim ver ve uzantıyı ekle
+        cb(null, 'data-' + Date.now() + '.' + ext);
+    }
+});
+const upload = multer({ storage: storage });
+// ----------------------------------------------------
 
 
 // --- ENDPOINTLER ---
 
-// A) CHATBOT (Mistral Tiny - GÜNCELLENDİ)
+// ANA SAYFAYI GÖSTER (Eklendi)
+app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/index.html');
+});
+
+// A) CHATBOT (Mistral Tiny)
 app.post('/api/chat', async (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ reply: "Boş mesaj gönderilemez." });
 
     try {
-        // Yeni SDK'da 'chat.complete' kullanılıyor
         const chatResponse = await mistral.chat.complete({
             model: 'mistral-tiny',
             messages: [{ role: 'user', content: message }],
         });
 
-        // Cevap yapısı da bazen değişebilir, burayı güvenli hale getirdik
         const botReply = chatResponse.choices[0].message.content;
         res.json({ reply: botReply });
 
@@ -79,6 +98,8 @@ app.post('/api/upload-and-send-emails', upload.single('file'), async (req, res) 
     if (!req.file) return res.status(400).json({ message: 'Dosya yüklenmedi.' });
 
     try {
+        console.log(`📂 Dosya yüklendi: ${req.file.path}`); // Log ekledik
+        
         const workbook = xlsx.readFile(req.file.path);
         const sheetName = workbook.SheetNames[0];
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -93,9 +114,10 @@ app.post('/api/upload-and-send-emails', upload.single('file'), async (req, res) 
 
         // İlk aşama: Veritabanına kaydet
         for (const row of data) {
-            const ad = row['Ad'] || row['name'] || '';
-            const soyad = row['Soyad'] || row['surname'] || '';
-            const email = row['Email'] || row['email'];
+            // Sütun isimleri büyük/küçük harf duyarlı olabilir, hepsini deniyoruz
+            const ad = row['Ad'] || row['ad'] || row['Name'] || row['name'] || '';
+            const soyad = row['Soyad'] || row['soyad'] || row['Surname'] || row['surname'] || '';
+            const email = row['Email'] || row['email'] || row['E-posta'] || row['e-posta'];
 
             if (email) {
                 try {
@@ -108,7 +130,7 @@ app.post('/api/upload-and-send-emails', upload.single('file'), async (req, res) 
 
                     console.log(`✅ DB: ${ad} ${soyad} (${email}) kaydedildi.`);
 
-                    // Eklenen kullanıcıyı kaydet
+                    // Eklenen kullanıcıyı listeye al
                     addedUsers.push({
                         id: insertedData[0].id,
                         name: ad,
@@ -118,16 +140,21 @@ app.post('/api/upload-and-send-emails', upload.single('file'), async (req, res) 
 
                     uploadSuccessCount++;
                 } catch (error) {
+                    // Unique hatası vb.
                     console.error(`❌ DB Hatası (${email}):`, error.message);
                     uploadErrors.push(`${email}: ${error.message}`);
                 }
             } else {
-                console.log(`⚠️ Satır atlandı: Email adresi yok`);
+                console.log(`⚠️ Satır atlandı: Email adresi yok veya sütun ismi hatalı.`);
             }
         }
 
         // Geçici dosyayı sil
-        fs.unlinkSync(req.file.path);
+        try {
+            fs.unlinkSync(req.file.path);
+        } catch (e) {
+            console.log("Dosya silinirken uyarı:", e.message);
+        }
 
         console.log(`\n📊 Veritabanı Özeti: ${uploadSuccessCount} kayıt eklendi, ${uploadErrors.length} hata\n`);
 
@@ -185,15 +212,13 @@ app.post('/api/upload-and-send-emails', upload.single('file'), async (req, res) 
                     await transporter.sendMail(mailOptions);
 
                     // Veritabanını güncelle
-                    const { error } = await supabase
+                    await supabase
                         .from('users')
                         .update({
                             satisfaction_sent: true,
                             satisfaction_sent_at: new Date().toISOString()
                         })
                         .eq('id', id);
-
-                    if (error) throw error;
 
                     console.log(`✅ E-posta gönderildi: ${fullName} (${email})`);
                     emailSuccessCount++;
@@ -207,12 +232,12 @@ app.post('/api/upload-and-send-emails', upload.single('file'), async (req, res) 
         }
 
         // Sonuç mesajı
-        let message = `✅ ${uploadSuccessCount} kullanıcı veritabanına eklendi.`;
+        let message = `✅ ${uploadSuccessCount} kullanıcı eklendi.`;
         if (emailSuccessCount > 0) {
             message += ` ${emailSuccessCount} e-posta gönderildi.`;
         }
-        if (uploadErrors.length > 0 || emailErrors.length > 0) {
-            message += ` | ${uploadErrors.length + emailErrors.length} toplam hata oluştu.`;
+        if (uploadErrors.length > 0) {
+            message += ` (Bazı kayıtlar eklenemedi, konsola bakınız)`;
         }
 
         res.json({
@@ -286,7 +311,7 @@ app.get('/api/satisfaction-response', async (req, res) => {
     }
 });
 
-// D) ESKİ FORMAT DESTEĞİ - /api/vote (Eski maillerdeki linkler için)
+// D) ESKİ FORMAT DESTEĞİ - /api/vote (Legacy)
 app.get('/api/vote', async (req, res) => {
     const { email, vote } = req.query;
 
@@ -295,10 +320,8 @@ app.get('/api/vote', async (req, res) => {
     }
 
     try {
-        // vote: 'yes' veya 'no' -> satisfaction_response: 1 veya 0
         const responseValue = vote === 'yes' ? 1 : 0;
 
-        // Email ile kullanıcıyı bul ve cevabını kaydet
         const { error } = await supabase
             .from('users')
             .update({
@@ -309,35 +332,7 @@ app.get('/api/vote', async (req, res) => {
 
         if (error) throw error;
 
-        console.log(`✅ Kullanıcı (${email}) cevabı kaydedildi: ${vote === 'yes' ? 'Memnun' : 'Memnun Değil'}`);
-
-        // Teşekkür sayfası
-        const emoji = vote === 'yes' ? '😊' : '😞';
-        const message = vote === 'yes' ? 'Memnun kaldığınızı duyduğumuza çok sevindik!' : 'Geri bildiriminiz için teşekkürler. Kendimizi geliştirmek için çalışacağız.';
-
-        res.send(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <title>Teşekkürler</title>
-                <style>
-                    body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; }
-                    .thank-you { background: white; padding: 50px; border-radius: 20px; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,0.2); max-width: 500px; }
-                    .emoji { font-size: 80px; margin-bottom: 20px; }
-                    h1 { color: #333; margin-bottom: 20px; }
-                    p { color: #666; font-size: 18px; line-height: 1.6; }
-                </style>
-            </head>
-            <body>
-                <div class="thank-you">
-                    <div class="emoji">${emoji}</div>
-                    <h1>Teşekkürler!</h1>
-                    <p>${message}</p>
-                </div>
-            </body>
-            </html>
-        `);
+        res.send('Cevabınız kaydedildi, teşekkürler!');
 
     } catch (error) {
         console.error('❌ Veritabanı hatası:', error);
@@ -348,14 +343,12 @@ app.get('/api/vote', async (req, res) => {
 // E) İSTATİSTİKLER
 app.get('/api/satisfaction-stats', async (req, res) => {
     try {
-        // Tüm kullanıcıları çek
         const { data: users, error } = await supabase
             .from('users')
             .select('*');
 
         if (error) throw error;
 
-        // İstatistikleri hesapla
         const totalUsers = users.length;
         const emailsSent = users.filter(u => u.satisfaction_sent === true).length;
         const totalResponses = users.filter(u => u.satisfaction_response !== null).length;
@@ -363,17 +356,13 @@ app.get('/api/satisfaction-stats', async (req, res) => {
         const notSatisfiedCount = users.filter(u => u.satisfaction_response === 0).length;
 
         res.json({
-            totalUsers: totalUsers,
-            emailsSent: emailsSent,
-            totalResponses: totalResponses,
-            satisfiedCount: satisfiedCount,
-            notSatisfiedCount: notSatisfiedCount,
-            responseRate: emailsSent > 0
-                ? ((totalResponses / emailsSent) * 100).toFixed(1)
-                : '0.0',
-            satisfactionRate: totalResponses > 0
-                ? ((satisfiedCount / totalResponses) * 100).toFixed(1)
-                : '0.0'
+            totalUsers,
+            emailsSent,
+            totalResponses,
+            satisfiedCount,
+            notSatisfiedCount,
+            responseRate: emailsSent > 0 ? ((totalResponses / emailsSent) * 100).toFixed(1) : '0.0',
+            satisfactionRate: totalResponses > 0 ? ((satisfiedCount / totalResponses) * 100).toFixed(1) : '0.0'
         });
 
     } catch (error) {
