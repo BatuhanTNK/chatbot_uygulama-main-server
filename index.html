@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat & Excel Mailer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .main-row {
+            height: 100%;
+        }
+
+        /* Sol Taraf */
+        .chat-section {
+            background: white;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            border-right: 1px solid #ddd;
+        }
+
+        .chat-box {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #fff;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 10px 15px;
+            border-radius: 15px;
+            max-width: 80%;
+        }
+
+        .user-msg {
+            background-color: #0d6efd;
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+
+        .bot-msg {
+            background-color: #e9ecef;
+            color: #333;
+            align-self: flex-start;
+        }
+
+        .chat-input-area {
+            padding: 20px;
+            border-top: 1px solid #ddd;
+            background: #f8f9fa;
+        }
+
+        /* Sağ Taraf */
+        .upload-section {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            background: #eef2f5;
+        }
+
+        .card-custom {
+            width: 80%;
+            max-width: 500px;
+            padding: 30px;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container-fluid main-row p-0">
+        <div class="row g-0 h-100">
+
+            <div class="col-md-6 chat-section">
+                <div class="p-3 border-bottom bg-primary text-white">
+                    <h5 class="m-0">🤖 Mistral AI Chatbot</h5>
+                </div>
+                <div id="chatBox" class="chat-box d-flex flex-column">
+                    <div class="message bot-msg">Merhaba! Ben Mistral Tiny. Sana nasıl yardımcı olabilirim?</div>
+                </div>
+                <div class="chat-input-area input-group">
+                    <input type="text" id="chatInput" class="form-control" placeholder="Sorunu yaz...">
+                    <button class="btn btn-primary" onclick="sendMessage()">Gönder</button>
+                </div>
+            </div>
+
+            <div class="col-md-6 upload-section">
+                <div class="card-custom text-center">
+                    <h3 class="mb-4">📁 Excel Yükle & Memnuniyet Anketi</h3>
+
+                    <!-- Excel Yükleme ve Mail Gönderme - TEK BUTON -->
+                    <div class="mb-4">
+                        <h5 class="text-muted mb-3">📊 Kullanıcı Ekle ve Mail Gönder</h5>
+                        <p class="text-muted small mb-3">
+                            Excel dosyasında <strong>Ad, Soyad, Email</strong> sütunları bulunmalıdır.<br>
+                            Kullanıcılar veritabanına eklenecek ve hemen memnuniyet anketi gönderilecektir.
+                        </p>
+
+                        <input type="file" id="excelInput" class="form-control mb-3" accept=".xlsx, .xls">
+                        <button onclick="uploadAndSendEmails()" class="btn btn-success w-100 py-2 mb-2" id="uploadBtn">
+                            📤 Yükle, Kaydet ve Tümüne Mail Gönder
+                        </button>
+                        <div id="statusResult" class="mt-2 fw-bold"></div>
+                    </div>
+
+
+                    <hr class="my-4">
+
+                    <!-- İstatistikler -->
+                    <div>
+                        <h5 class="text-muted mb-3">📊 Memnuniyet İstatistikleri</h5>
+                        <button onclick="loadStats()" class="btn btn-outline-secondary w-100 py-2 mb-3" id="statsBtn">
+                            🔄 İstatistikleri Yenile
+                        </button>
+                        <div id="statsDisplay" class="text-start"></div>
+                    </div>
+
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --- CHAT FONKSİYONU ---
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const chatBox = document.getElementById('chatBox');
+            const msg = input.value.trim();
+
+            if (!msg) return;
+
+            // Kullanıcı mesajını ekle
+            chatBox.innerHTML += `<div class="message user-msg">${msg}</div>`;
+            input.value = '';
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // Botun 'yazıyor...' durumunu simüle edebiliriz (opsiyonel)
+
+            try {
+                const res = await fetch('http://localhost:3000/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: msg })
+                });
+                const data = await res.json();
+
+                // Bot cevabını ekle
+                chatBox.innerHTML += `<div class="message bot-msg">${data.reply}</div>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } catch (err) {
+                chatBox.innerHTML += `<div class="message bot-msg text-danger">Hata: Sunucuya ulaşılamadı.</div>`;
+            }
+        }
+
+        // Enter tuşu ile gönderme
+        document.getElementById('chatInput').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+
+        // --- EXCEL UPLOAD FONKSİYONU (ESKİ VERSİYON - Sadece DB'ye kaydet) ---
+        async function uploadExcel() {
+            const fileInput = document.getElementById('excelInput');
+            const statusDiv = document.getElementById('statusResult');
+            const btn = document.getElementById('uploadBtn');
+
+            if (fileInput.files.length === 0) {
+                alert("Lütfen önce bir Excel dosyası seçin!");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            // UI Güncelleme (Yükleniyor...)
+            btn.disabled = true;
+            btn.innerText = "İşleniyor...";
+            statusDiv.innerHTML = '<span class="text-warning">Veriler işleniyor...</span>';
+
+            try {
+                const res = await fetch('http://localhost:3000/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    statusDiv.innerHTML = `<span class="text-success">✅ ${data.message}</span>`;
+                } else {
+                    statusDiv.innerHTML = `<span class="text-danger">❌ Hata: ${data.message}</span>`;
+                }
+            } catch (err) {
+                statusDiv.innerHTML = `<span class="text-danger">❌ Sunucu hatası!</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "📤 Yükle ve Veritabanına Ekle";
+                fileInput.value = ''; // Inputu temizle
+            }
+        }
+
+        // --- YENİ: EXCEL YÜKLE VE TÜM MAILLERI GÖNDER ---
+        async function uploadAndSendEmails() {
+            const fileInput = document.getElementById('excelInput');
+            const statusDiv = document.getElementById('statusResult');
+            const btn = document.getElementById('uploadBtn');
+
+            if (fileInput.files.length === 0) {
+                alert("Lütfen önce bir Excel dosyası seçin!");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            // UI Güncelleme (Yükleniyor...)
+            btn.disabled = true;
+            btn.innerText = "⏳ İşleniyor (Yükleme + E-posta)...";
+            statusDiv.innerHTML = '<span class="text-warning">📊 Veriler yükleniyor ve e-postalar gönderiliyor...</span>';
+
+            try {
+                const res = await fetch('http://localhost:3000/api/upload-and-send-emails', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    let detailMsg = `<div class="text-success">✅ ${data.message}</div>`;
+                    detailMsg += `<div class="text-muted small mt-2">`;
+                    detailMsg += `📊 Veritabanı: ${data.uploadSuccess} eklendi`;
+                    if (data.uploadErrors > 0) detailMsg += ` (${data.uploadErrors} hata)`;
+                    detailMsg += `<br>`;
+                    detailMsg += `📧 E-posta: ${data.emailSuccess} gönderildi`;
+                    if (data.emailErrors > 0) detailMsg += ` (${data.emailErrors} hata)`;
+                    detailMsg += `</div>`;
+                    statusDiv.innerHTML = detailMsg;
+
+                    // İstatistikleri otomatik yenile
+                    setTimeout(() => loadStats(), 1000);
+                } else {
+                    statusDiv.innerHTML = `<span class="text-danger">❌ Hata: ${data.message}</span>`;
+                }
+            } catch (err) {
+                statusDiv.innerHTML = `<span class="text-danger">❌ Sunucu hatası!</span>`;
+                console.error(err);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "📤 Yükle, Kaydet ve Tümüne Mail Gönder";
+                fileInput.value = ''; // Inputu temizle
+            }
+        }
+
+        // --- MEMNUNİYET ANKETİ GÖNDERME ---
+        async function sendSatisfactionEmails() {
+            const surveyBtn = document.getElementById('surveyBtn');
+            const surveyResult = document.getElementById('surveyResult');
+
+            surveyBtn.disabled = true;
+            surveyBtn.innerText = "Gönderiliyor...";
+            surveyResult.innerHTML = '<span class="text-warning">E-postalar gönderiliyor...</span>';
+
+            try {
+                const res = await fetch('http://localhost:3000/api/send-satisfaction-emails', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+
+                if (res.ok) {
+                    surveyResult.innerHTML = `<span class="text-success">✅ ${data.message}</span>`;
+                    // İstatistikleri otomatik yenile
+                    setTimeout(() => loadStats(), 1000);
+                } else {
+                    surveyResult.innerHTML = `<span class="text-danger">❌ Hata: ${data.message}</span>`;
+                }
+            } catch (err) {
+                surveyResult.innerHTML = `<span class="text-danger">❌ Sunucu hatası!</span>`;
+            } finally {
+                surveyBtn.disabled = false;
+                surveyBtn.innerText = "✉️ Tüm Kullanıcılara Mail Gönder";
+            }
+        }
+
+        // --- İSTATİSTİKLERİ YÜKLE ---
+        async function loadStats() {
+            const statsDisplay = document.getElementById('statsDisplay');
+            const statsBtn = document.getElementById('statsBtn');
+
+            statsBtn.disabled = true;
+            statsBtn.innerText = "Yükleniyor...";
+            statsDisplay.innerHTML = '<div class="text-center"><span class="text-muted">İstatistikler yükleniyor...</span></div>';
+
+            try {
+                const res = await fetch('http://localhost:3000/api/satisfaction-stats');
+                const data = await res.json();
+
+                if (res.ok) {
+                    const satisfactionColor = data.satisfactionRate >= 70 ? 'success' : data.satisfactionRate >= 40 ? 'warning' : 'danger';
+
+                    statsDisplay.innerHTML = `
+                    <div class="card border-0 bg-light p-3">
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <div class="small text-muted">Toplam Kullanıcı</div>
+                                <div class="fs-4 fw-bold text-primary">${data.totalUsers}</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="small text-muted">E-posta Gönderildi</div>
+                                <div class="fs-4 fw-bold text-info">${data.emailsSent}</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="small text-muted">Cevap Sayısı</div>
+                                <div class="fs-4 fw-bold text-secondary">${data.totalResponses}</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="small text-muted">Cevap Oranı</div>
+                                <div class="fs-4 fw-bold text-secondary">${data.responseRate}%</div>
+                            </div>
+                        </div>
+                        <hr class="my-2">
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <div class="small text-muted">😊 Memnun</div>
+                                <div class="fs-5 fw-bold text-success">${data.satisfiedCount}</div>
+                            </div>
+                            <div class="col-6">
+                                <div class="small text-muted">😞 Memnun Değil</div>
+                                <div class="fs-5 fw-bold text-danger">${data.notSatisfiedCount}</div>
+                            </div>
+                        </div>
+                        <hr class="my-2">
+                        <div class="text-center">
+                            <div class="small text-muted mb-1">Memnuniyet Oranı</div>
+                            <div class="fs-3 fw-bold text-${satisfactionColor}">${data.satisfactionRate}%</div>
+                            <div class="progress mt-2" style="height: 10px;">
+                                <div class="progress-bar bg-${satisfactionColor}" role="progressbar" 
+                                     style="width: ${data.satisfactionRate}%" 
+                                     aria-valuenow="${data.satisfactionRate}" aria-valuemin="0" aria-valuemax="100">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                } else {
+                    statsDisplay.innerHTML = '<div class="text-danger">❌ İstatistikler yüklenemedi</div>';
+                }
+            } catch (err) {
+                statsDisplay.innerHTML = '<div class="text-danger">❌ Sunucu hatası!</div>';
+            } finally {
+                statsBtn.disabled = false;
+                statsBtn.innerText = "🔄 İstatistikleri Yenile";
+            }
+        }
+
+        // Sayfa yüklendiğinde istatistikleri otomatik yükle
+        window.addEventListener('load', () => {
+            loadStats();
+        });
+    </script>
+
+</body>
+
+</html>
